@@ -134,7 +134,7 @@ async function enter() {
     const { data: { user } } = await DB.client.auth.getUser();
     const me = QB.PEOPLE.find((p) => p.auth_id === (user && user.id));
     if (!me) { S.loadError = 'Signed in, but this account is not on the purchasing team.'; S.loading = false; render(); return; }
-    S.me = me.key; S.authed = true; S.loading = false; S.route = 'poverview';
+    S.me = me.key; S.authed = true; S.loading = false; S.route = location.hash === '#planning' ? 'planning' : 'poverview';   // a reload stays on Container Planning
   } catch (e) {
     S.loadError = `Couldn't load the boards: ${e.message}`; S.loading = false;
   }
@@ -155,7 +155,7 @@ function chpassHtml() {
 
 // ---- navigation + render ----
 const ACT = {};
-const NAV = [['poverview', 'Overview'], ['research', 'Supplier Research'], ['pos', 'Purchase Orders'], ['suppliers', 'Suppliers']];
+const NAV = [['poverview', 'Overview'], ['research', 'Supplier Research'], ['pos', 'Purchase Orders'], ['suppliers', 'Suppliers'], ['planning', 'Container Planning']];
 function navHtml() {
   const me = person(S.me);
   const w = workList().length;
@@ -173,7 +173,8 @@ function render() {
   if (!S.authed) { closePop(); $('#app').innerHTML = signinHtml(); $('#drawer').innerHTML = ''; $('#dlg').innerHTML = ''; return; }
   const sc = $('.scroll'); const keep = sc ? [sc.scrollLeft, sc.scrollTop] : null; const y = scrollY;
   closePop();
-  const views = { pos: () => viewBoard('pos'), research: () => viewBoard('research'), poverview: viewPOverview, suppliers: viewSuppliers, mywork: viewMyWork };
+  if ((location.hash === '#planning') !== (S.route === 'planning')) history.replaceState(null, '', S.route === 'planning' ? '#planning' : location.pathname + location.search);
+  const views = { pos: () => viewBoard('pos'), research: () => viewBoard('research'), poverview: viewPOverview, suppliers: viewSuppliers, mywork: viewMyWork, planning: () => (typeof viewPlanning === 'function' ? viewPlanning() : '<div class="panel">Container Planning did not load. Reload the page.</div>') };   // planning.js missing or stale must never stop the boards drawing
   $('#app').innerHTML = navHtml() + (views[S.route] || views.poverview)();
   $('#drawer').innerHTML = S.open ? drawerHtml(item(S.open)) : '';
   $('#dlg').innerHTML = S.chpass ? chpassHtml() : '';

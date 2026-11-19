@@ -1,0 +1,254 @@
+/* Container Planning (planning.js). Every rule sits under .planning, so nothing here can touch the boards.
+   Layout: the dashboard's own shell, one context bar that picks category / supplier / draft, a live container
+   meter, then two tabs (Forecast, Container) that share the same numbers. Colours come from app.css; the
+   few extra tokens this page needs are declared on .planning itself, for light and both dark switches.
+   Everything above the table is kept to single lines so the table gets the room (Liam, 18/11/2026): at 1440 x 900
+   its top edge sits above 400 px, and above 215 px in Full view.
+   Laptops (Liam, 19/11/2026: "We are all using laptops"): the tabs, the tools and the two page buttons share one
+   strip, and on a laptop-height window (960 px high or less, wider than a phone) the bars above the table and the
+   table rows are drawn tighter. See the "laptop windows" block at the end. */
+.planning{--accent-ink:#7A5A1E;--accent-fg:#FFFFFF;--warn:#8A5F00;--yel:#FFF4B8;--yel-line:#D9BE3C;--meter:#E9E5DB;--mute-row:#FAF9F5}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .planning{
+  --accent-ink:#D6A95E;--accent-fg:#141A24;--warn:#E0B652;--yel:#4A4015;--yel-line:#8C7A2A;--meter:#2A3444;--mute-row:#19202C;color-scheme:dark}}
+:root[data-theme="dark"] .planning{
+  --accent-ink:#D6A95E;--accent-fg:#141A24;--warn:#E0B652;--yel:#4A4015;--yel-line:#8C7A2A;--meter:#2A3444;--mute-row:#19202C;color-scheme:dark}
+
+/* shared pieces, tuned for this page only */
+.planning .eyebrow{color:var(--accent-ink)}
+.planning .btn.gold{background:var(--accent-ink);border-color:var(--accent-ink);color:var(--accent-fg)}
+.planning .btn[disabled]{opacity:.45;cursor:not-allowed}
+.planning .seg{flex-wrap:wrap}
+.planning .seg button[disabled]{cursor:not-allowed;opacity:.6}
+.planning .chip{display:inline-block;background:var(--accent-soft);color:var(--accent-ink)}
+.planning .chip.good{background:var(--good-bg);color:var(--good)}
+.planning .chip.bad{background:var(--bad-bg);color:var(--bad)}
+.planning .chip.warn{background:var(--warn-bg);color:var(--warn)}
+.planning .chip.plain{background:transparent;color:var(--ink-soft);border:1px solid var(--line)}
+
+/* page head: one line. The tabs name the view, so the h1 is there for screen readers only. */
+.planning .pl-vh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.planning header.pl-head{align-items:center;gap:2px 18px;margin-bottom:6px}
+.planning .pl-head .eyebrow{margin:0}
+.planning .pl-stamp{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:0 16px;font-size:12px;color:var(--ink-soft);text-align:right;min-width:0}
+.planning .pl-stamp b{color:var(--ink)}
+.planning .pl-stamp .btn{margin:0 0 0 2px;padding:2px 8px}
+.planning .pl-stamp #pl-prog:empty{display:none}
+/* while a usage refresh runs, its progress text takes the usage stamp's place: the head stays one line, the table does not jump */
+.planning .pl-stamp.is-busy .pl-usage{display:none}
+.planning .pl-old{text-decoration:underline dotted;text-underline-offset:3px;cursor:help}
+
+/* context bar */
+.planning .pl-ctx{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:flex-end;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 12px 7px;margin-bottom:6px}
+.planning .pl-lab{display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);font-weight:600;margin-bottom:1px;line-height:1.3}
+.planning .pl-ctx select,.planning .pl-hdr input,.planning .pl-tools input{font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:5px;background:var(--field);max-width:100%}
+.planning .pl-ctx .seg button{padding:5px 11px}
+.planning .pl-ctx .pl-grow{flex:1 1 320px;min-width:0}
+.planning .pl-draftrow{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center}
+.planning .pl-draftrow select{flex:1 1 200px;min-width:0}
+.planning .pl-draftrow .btn{padding:5px 10px}
+.planning .pl-saved{font-size:12px;white-space:normal;min-width:0}
+.planning .pl-moved{font:inherit;color:var(--warn);font-weight:600;background:none;border:0;padding:0;cursor:pointer;text-decoration:underline dotted;white-space:normal;text-align:left}
+.planning .pl-polink{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-top:5px}
+.planning .pl-polink .chip{white-space:normal}
+.planning .pl-ctx .pl-sp{margin-left:auto}
+
+/* container meter: headline, state and the stats on one line where the width allows, a slim bar under them */
+.planning .pl-meter{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:5px 12px 7px;margin-bottom:6px;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 16px}
+.planning .pl-meter .pl-top{display:flex;flex-wrap:wrap;gap:0 10px;align-items:baseline}
+.planning .pl-meter .pl-big{font-size:18px;font-weight:600;line-height:1.3}
+.planning .pl-meter .pl-big small{font-size:12.5px;font-weight:500;color:var(--ink-soft)}
+.planning .pl-meter .pl-top .muted{font-size:12px}
+.planning .pl-meter .pl-state{font-size:12.5px;font-weight:600}
+.planning .pl-bar{order:3;flex:0 0 100%;position:relative;height:6px;margin-top:3px;background:var(--meter);border-radius:3px;overflow:hidden}
+.planning .pl-bar i{position:absolute;inset:0 auto 0 0;background:var(--good);transition:width .15s ease}
+.planning .pl-bar i.is-over{background:var(--bad)}
+.planning .pl-bar i.is-tight{background:var(--warn)}
+.planning .pl-bar i.is-low{background:var(--accent)}
+.planning .pl-bar i.is-done{background:var(--ink-soft)}
+@media (prefers-reduced-motion:reduce){.planning .pl-bar i{transition:none}}
+.planning .pl-kv{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 12px;font-size:12px;color:var(--ink-soft);min-width:0}
+.planning .pl-kv b{color:var(--ink);font-weight:600}
+.planning .pl-kv .chip{white-space:normal}
+.planning .pl-kv .pl-hint{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.planning .pl-kv .btn{padding:2px 8px;white-space:nowrap}
+.planning .pl-hot{color:var(--bad);font-weight:600}
+.planning .pl-fine{color:var(--good);font-weight:600}
+.planning .pl-over{color:var(--warn);font-weight:600}
+
+/* The strip above the table: the Forecast | Container tabs, that tab's own tools, then How this works and Full view
+   at the right-hand end. One row where the window is wide enough; it wraps group by group where it is not (the
+   three order buttons stay together), so the tabs never take a row of their own. */
+.planning .pl-tools{display:flex;gap:5px 10px;flex-wrap:wrap;align-items:center;margin:2px 0 6px}
+.planning .pl-tabs{display:flex;gap:4px;flex:0 0 auto;padding-right:10px;border-right:1px solid var(--line)}
+.planning .pl-tab{font-size:13.5px;font-weight:600;padding:5px 14px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink-soft);cursor:pointer;white-space:nowrap}
+.planning .pl-tab[aria-selected="true"]{background:var(--card);color:var(--ink);border-color:var(--ink);box-shadow:inset 0 -2px 0 var(--accent)}
+.planning .pl-acts{display:inline-flex;flex-wrap:wrap;gap:5px 8px;align-items:center;min-width:0}
+.planning .pl-end{display:inline-flex;flex-wrap:wrap;gap:5px 8px;align-items:center;justify-content:flex-end;margin-left:auto;min-width:0}
+.planning .pl-end .btn{padding:5px 12px;font-size:12.5px;white-space:nowrap}
+.planning .pl-tools .btn{padding:5px 10px}
+.planning .pl-tools .seg button{padding:5px 10px}
+.planning .pl-tools input[type=search]{min-width:110px;flex:1 1 110px;max-width:220px}
+.planning .pl-tgt{display:flex;gap:5px 10px;flex-wrap:wrap;align-items:center;font-size:12.5px;color:var(--ink-soft)}
+.planning .pl-tgt input{width:44px;text-align:right;padding:4px 6px;border:1px solid var(--yel-line);border-radius:4px;background:var(--yel);font-size:12.5px}
+.planning .pl-how{font-size:12px;color:var(--ink-soft);margin:-1px 0 6px}
+.planning .pl-how[hidden]{display:none}
+.planning .pl-howbtn{font:inherit;font-size:12px;font-weight:600;color:var(--ink-soft);background:none;border:0;padding:4px 2px;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px;white-space:nowrap}
+.planning .pl-howbtn::after{content:" \25BE"}
+.planning .pl-howbtn[aria-expanded="true"]::after{content:" \25B4"}
+.planning .pl-skip{color:var(--ink-soft);opacity:.75;cursor:help}
+.planning .pl-held{text-decoration:underline dotted;text-underline-offset:3px;cursor:help}
+/* "the last stock re-read failed" is on the stamp; Full view hides the stamp, so there the meter carries it */
+.planning .pl-kv .pl-stockerr{display:none;cursor:help}
+.planning.is-full .pl-kv .pl-stockerr{display:inline}
+.planning .pl-dot{border-bottom:1.5px dotted var(--accent);padding-bottom:1px;color:var(--ink)}
+
+/* split tip on the month and In draft cells */
+.planning .pl-grid td.pl-split.pl-pj,.planning .pl-grid td.pl-split.pl-indraft{cursor:help}
+.planning .pl-grid td.pl-split.pl-indraft .pl-v{background:var(--accent-soft);color:var(--accent-ink);border-radius:4px;padding:2px 7px;font-weight:600}
+.planning .pl-grid td.pl-split.pl-pj .pl-v{border-bottom:1.5px dotted var(--accent);padding-bottom:1px}
+.planning .pl-grid td.pl-split:hover,.planning .pl-grid td.pl-split:focus{background:var(--accent-soft);outline:none}
+.planning .pl-tip{position:fixed;z-index:30;background:var(--btn-bg);color:var(--btn-fg);font-size:12px;line-height:1.55;padding:9px 12px;border-radius:6px;box-shadow:var(--shadow);pointer-events:none;white-space:nowrap;font-variant-numeric:tabular-nums}
+.planning .pl-tip[hidden]{display:none}
+.planning .pl-tip b{display:block;margin-bottom:3px;font-weight:600}
+.planning .pl-tip div{display:flex;justify-content:space-between;gap:18px}
+.planning .pl-tip div.pl-t{border-top:1px solid rgba(255,255,255,.35);margin-top:4px;padding-top:4px;font-weight:600}
+
+/* the two tables. Outside full view the table may grow to the whole window (less 16px), so once the page is
+   scrolled down to it, it fills the screen. Up-and-down scrolling passes on to the page at either end of the
+   table (that is how the rest of it comes into view); sideways it stays inside the table. */
+.planning .pl-scroll{max-height:max(320px,calc(100vh - 16px));overscroll-behavior-x:contain}
+.planning .pl-grip{height:12px;display:flex;align-items:center;justify-content:center;cursor:ns-resize;touch-action:none;margin-top:2px}
+.planning .pl-grip i{display:block;width:56px;height:4px;border-radius:2px;background:var(--line)}
+.planning .pl-grip:hover i,.planning .pl-grip.is-on i{background:var(--accent)}
+.planning table.pl-grid{border-collapse:separate;border-spacing:0;font-size:13px;width:100%}
+.planning .pl-grid thead{position:sticky;top:0;z-index:3}
+.planning .pl-grid th{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);font-weight:600;padding:7px 8px;border-bottom:1.5px solid var(--ink);border-right:1px solid var(--line);text-align:right;white-space:nowrap;background:var(--card)}
+.planning .pl-grid th.pl-l,.planning .pl-grid td.pl-l{text-align:left}
+.planning .pl-grid th.pl-colgrp{border-bottom:1px solid var(--line);text-align:center;color:var(--accent-ink)}
+.planning .pl-grid th.pl-unread{font-style:italic;text-decoration:underline dotted;text-underline-offset:3px;cursor:help}
+.planning .pl-grid td{padding:5px 8px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);text-align:right;white-space:nowrap;background:var(--card);height:40px}
+.planning .pl-grid .pl-stick{position:sticky;left:0;z-index:2;text-align:left;min-width:170px;max-width:240px;white-space:normal}
+.planning .pl-grid thead .pl-stick{z-index:4}
+.planning .pl-grid tbody tr:hover td{background:var(--hover)}
+.planning .pl-grid tr.pl-off td{background:var(--mute-row);color:var(--ink-soft)}
+.planning .pl-sku{font-weight:600}
+.planning .pl-desc{display:block;font-size:11.5px;color:var(--ink-soft);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
+.planning .pl-flags{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}
+.planning .pl-flags:empty{display:none}
+.planning .pl-sub{display:block;font-size:10.5px;color:var(--ink-soft);font-weight:400}
+.planning .pl-grid td.pl-sep,.planning .pl-grid th.pl-sep{border-left:2px solid var(--line)}
+.planning .pl-cellin{display:inline-flex;align-items:center;gap:4px;justify-content:flex-end}
+.planning .pl-arrow{font-size:11px;font-weight:700;color:var(--warn);min-width:10px;cursor:help}
+.planning input.pl-yel{width:62px;text-align:right;padding:5px 6px;border:1px solid var(--yel-line);border-radius:4px;background:var(--yel);font-variant-numeric:tabular-nums}
+.planning input.pl-yel.pl-typed{border-width:2px;border-color:var(--ink);font-weight:600}
+.planning input.pl-yel[disabled]{opacity:.75}
+.planning .pl-neg{color:var(--bad);font-weight:600}
+.planning .pl-grid tr.pl-tot td{font-weight:600;border-top:1.5px solid var(--ink);position:sticky;bottom:0;z-index:2}
+
+/* container tab: the same strip (tabs, the two boxes, the buttons), empty state, footnotes */
+.planning .pl-hdr{position:relative;display:flex;flex-wrap:wrap;gap:5px 10px;align-items:center;margin:2px 0 6px}
+.planning .pl-fld{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.planning .pl-fld .pl-lab{margin:0;white-space:nowrap}
+.planning .pl-hdr input{width:96px;text-align:right;background:var(--yel);border-color:var(--yel-line)}
+.planning .pl-hdr input.pl-bad{border-color:var(--bad);outline:2px solid var(--bad);outline-offset:-1px}
+.planning .pl-hdr .btn{padding:5px 12px}
+/* why a figure being typed is not taken: a callout under the strip, out of the flow, so the strip keeps its height and the table does not jump */
+.planning .pl-badmsg{position:absolute;left:0;top:100%;z-index:6;max-width:min(560px,100%);margin-top:2px;padding:4px 9px;font-size:12px;font-weight:600;color:var(--bad);background:var(--card);border:1px solid var(--bad);border-radius:5px;box-shadow:var(--shadow)}
+.planning .pl-badmsg:empty{display:none}
+/* the note is a line of its own under the strip: behind How this works for an open draft, always there on a read-only one */
+.planning .pl-hdr .pl-note{font-size:12px;color:var(--ink-soft);flex:0 0 100%;order:9;min-width:0}
+.planning .pl-hdr .pl-note[hidden]{display:none}
+.planning .pl-hdr .pl-note b{color:var(--ink);font-weight:600}
+.planning .pl-empty{background:var(--card);border:1px dashed var(--line);border-radius:6px;padding:28px 18px;text-align:center;color:var(--ink-soft)}
+.planning .pl-empty b{color:var(--ink)}
+.planning .pl-foot{margin-top:22px;border-top:1px solid var(--line);padding-top:12px;font-size:12.5px;color:var(--ink-soft);display:grid;gap:6px}
+.planning .pl-foot b{color:var(--ink)}
+
+/* Full view: a class on the planning root, so it cannot outlive the page. Sits over the menu, under the
+   card drawer (45), popovers (60) and toasts (70). Esc or the button goes back. */
+.planning.is-full{position:fixed;inset:0;z-index:35;background:var(--paper);display:flex;flex-direction:column;overflow:auto;
+  padding:6px max(16px,env(safe-area-inset-right,0px)) 6px max(16px,env(safe-area-inset-left,0px))}
+/* a read-only notice (.pl-ro: a past PO's caveat, an ordered or archived draft) is never tucked away */
+.planning.is-full > header.page,.planning.is-full .pl-foot,.planning.is-full .pl-how:not(.pl-ro),.planning.is-full .pl-howbtn,.planning.is-full .pl-grip,.planning.is-full .pl-hdr .pl-note:not(.pl-ro){display:none}
+/* the context bar is one row: its small labels are kept for screen readers only (the selects speak for themselves) */
+.planning.is-full .pl-ctx .pl-lab{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.planning.is-full .pl-ctx{align-items:center;padding:5px 10px;margin-bottom:5px}
+.planning.is-full .pl-meter{padding:3px 12px 6px;margin-bottom:5px}
+.planning.is-full .pl-tools,.planning.is-full .pl-hdr{margin:0 0 5px}
+.planning.is-full .pl-view{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.planning.is-full .pl-scroll{flex:1 1 0;min-height:240px;max-height:none}
+
+/* Laptop windows: a laptop leaves the page 600 to about 950 px of height once the browser's own bars are taken off
+   (1366 x 768; 1920 x 1080 at 100%, 125% or 150%; a MacBook at its default scaling, 830 to 890 px). Nothing is taken
+   away. The bars above the table are drawn tighter, the small labels over the three selects are kept for screen
+   readers only (each select says what it is on hover), and the table rows are a little denser. The selects, the
+   boxes, the tabs and the buttons of the context bar and the strip are 28 px high (segmented buttons 26 px in a
+   28 px frame), as are the yellow boxes; the small buttons inside the meter and the head line keep their own size.
+   The line is 960 px, not 800: at 800 a window one pixel taller showed four FEWER rows, and every MacBook sat on
+   the wrong side of it. A phone (640 px wide or less) is left as it was: it is used by touch, and its page
+   scrolls anyway. */
+@media (max-height:960px) and (min-width:641px){
+  .planning:not(.is-full){margin-top:-6px}
+  .planning header.pl-head{margin-bottom:4px}
+  .planning .pl-ctx{align-items:center;gap:4px 12px;padding:4px 10px;margin-bottom:4px}
+  .planning .pl-ctx .pl-lab{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .planning .pl-draftrow{gap:4px 8px}
+  /* the "check the PO number" strip is a row of its own under the whole bar (not a third line squeezed under the
+     draft select), so the draft row keeps the bar's full width beside the other pieces */
+  .planning .pl-ctx .pl-grow{display:contents}
+  .planning .pl-ctx .pl-draftrow{flex:1 1 320px;min-width:0}
+  .planning .pl-ctx .pl-polink{flex:0 0 100%;order:9;margin-top:0}
+  .planning .pl-ctx select,.planning .pl-ctx .btn,.planning .pl-tools .btn,.planning .pl-hdr .btn,.planning .pl-tools input,.planning .pl-hdr input,.planning .pl-tab{height:28px;padding-block:0}
+  .planning .pl-ctx .seg button,.planning .pl-tools .seg button{height:26px;padding-block:0}
+  .planning .pl-ctx .seg button{padding-inline:9px}
+  .planning .pl-meter{padding:2px 10px 4px;margin-bottom:4px;gap:0 14px}
+  .planning .pl-meter .pl-big{font-size:16px;line-height:20px}
+  .planning .pl-kv{gap:0 12px}
+  .planning .pl-bar{height:5px;margin-top:2px}
+  .planning .pl-tools,.planning .pl-hdr{gap:4px 8px;margin:0 0 5px}
+  .planning .pl-tabs{padding-right:8px}
+  .planning .pl-howbtn{height:28px;padding-block:0}
+  .planning .pl-how{margin:0 0 5px}
+  .planning .pl-grip{height:10px;margin-top:1px}
+  /* denser rows: the two-line SKU cell sets the row, the yellow boxes stay 28 px */
+  .planning .pl-grid th{padding:4px 8px}
+  .planning .pl-grid td{padding:3px 8px;height:34px;line-height:1.3}
+  .planning .pl-flags{margin-top:2px}
+  .planning input.pl-yel{height:28px;padding-block:0}
+  /* Full view on a short window: the context bar is one plain line (no card around it), the meter and the strip sit close */
+  .planning.is-full{padding-top:3px;padding-bottom:4px}
+  .planning.is-full .pl-ctx{background:none;border:0;border-radius:0;padding:0;margin-bottom:3px}
+  .planning.is-full .pl-meter{padding:0 10px 2px;margin-bottom:3px}
+  .planning.is-full .pl-tools,.planning.is-full .pl-hdr{gap:3px 8px;margin:0 0 3px}
+}
+/* Laptop height and not wide: the meter needs two lines there, so its bar rides on the first line (after the
+   headline) instead of taking a third. Wider than this the meter is one line with the bar under it. */
+@media (max-height:960px) and (min-width:641px) and (max-width:1420px){
+  .planning .pl-bar{order:0;flex:1 1 90px;min-width:90px;align-self:center;margin-top:0}
+  .planning .pl-kv{flex:0 0 100%}
+}
+/* Narrow laptops (1280 px wide: 1920 x 1080 at 150%): the Forecast table is 1,316 px to the end of its Order
+   cartons box, so that column sat just past the right-hand edge. A little less side padding in the cells and a
+   narrower SKU column bring it on screen without a sideways scroll. Wider windows and phones are as they were. */
+@media (max-width:1340px) and (min-width:641px){
+  .planning .pl-grid th,.planning .pl-grid td{padding-left:5px;padding-right:5px}
+  .planning .pl-grid .pl-stick{min-width:150px;max-width:200px}
+  .planning .pl-desc{max-width:190px}
+}
+
+@media (max-width:640px){
+  .planning .pl-stamp{text-align:left;justify-content:flex-start}
+  /* phone: the tabs lead the strip with Full view at the end of their row, the tools follow, How this works comes last; the two Container boxes sit side by side with their labels over them */
+  .planning .pl-tabs{flex-wrap:wrap;border-right:0;padding-right:0}
+  .planning .pl-tab{padding-inline:12px}
+  .planning #pl-strip > *{order:2}
+  .planning #pl-strip > .pl-tabs{order:0}
+  .planning #pl-strip > .pl-end{display:contents}
+  .planning #pl-strip #pl-full{order:1;margin-left:auto}
+  .planning #pl-strip #pl-howbtn{order:3;margin-left:auto}
+  .planning .pl-fld{display:block}
+  .planning .pl-fld .pl-lab{margin-bottom:1px;white-space:normal}
+  .planning .pl-ctx .pl-sp{margin-left:0}
+  .planning .pl-grid .pl-stick{min-width:130px;max-width:150px}
+  .planning .pl-desc{max-width:130px}
+}

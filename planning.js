@@ -29,7 +29,7 @@
   const PL = {
     phase: 'idle', error: '', step: '',            // idle | loading | ready | error
     me: null, loadNo: 0, refAt: 0, freshBusy: false, busyPo: false, busyNew: false,
-    ref: null, bySku: {}, fam: null, excl: {},     // excl: SKU -> the usage-exclusion rules on it (reason + the month each starts)
+    ref: null, bySku: {}, fam: null, excl: {}, xdrafts: [],   // xdrafts: OTHER suppliers' open drafts (id, name, supplier, manual, lines), for In draft on shared SKUs     // excl: SKU -> the usage-exclusion rules on it (reason + the month each starts)
     today: '', windowFrom: '', fyLabel: '', months: [], part: null,
     usage: {}, hasUsage: false, run: null, fullM: [], fullK: {},   // fullM: the months read in full (the only ones averaged)
     stock: {}, stockAt: null, stockTried: 0, stockBusy: false, stockErr: '',
@@ -85,7 +85,10 @@
         // the usage exclusions, for the "not counted" line in a month's hover: the reason only, never the customer code
         selAll(() => c.from('pd_cp_usage_exclusions').select('sku,from_month,reason,active').order('sku')),
       ]);
-      return { categories, skus, aliases, exclusions };
+      // Per-supplier carton details (migration 2): a SKU bought from two suppliers shows under both. If the table is not
+      // there (migration 2 not run, or rolled back) every SKU stays under the supplier on its own row, as before.
+      const links = await selAll(() => c.from('pd_cp_sku_suppliers').select('sku,supplier_id,cbm_per_carton,usd_per_unit,moq_cartons,units_per_ctn,active,extra').order('sku')).catch(() => []);
+      return { categories, skus, aliases, exclusions, links };
     },
     async usage(windowFrom) {
       const c = DB.client;
@@ -95,7 +98,12 @@
       ]);
       return { rows, run: runs[0] || null };
     },
-    drafts: (supplierId) => sel(DB.client.from('pd_cp_drafts').select('*').eq('supplier_id', supplierId).is('archived_at', null).order('id')),
+    async drafts(supplierId) {                               // every supplier's drafts in one read: this supplier's come back, and the other
+      const rows = await sel(DB.client.from('pd_cp_drafts').select('*').is('archived_at', null).order('id'));   // suppliers' open drafts ride along as .others (In draft on shared SKUs)
+      const own = rows.filter((r) => String(r.supplier_id) === String(supplierId));
+      own.others = rows.filter((r) => String(r.supplier_id) !== String(supplierId) && r.kind === 'draft' && !r.ordered_at);
+      return own;
+    },
     archived: (supplierId) => sel(DB.client.from('pd_cp_drafts').select('*').eq('supplier_id', supplierId).not('archived_at', 'is', null).order('archived_at', { ascending: false }).limit(10)),
     async createDraft(fields) { return (await sel(DB.client.from('pd_cp_drafts').insert(fields).select('*')))[0]; },
     async saveDraft(id, fields, knownUpdatedAt) {         // null = someone else changed it since we read it
@@ -221,6 +229,23 @@
       const rest = code.slice(b.length);
       return /^\d+$/.test(rest) ? [b, 'pack', +rest / PL.bySku[b].carton_qty] : null;
     };
+    // One row per (SKU, supplier) from pd_cp_sku_suppliers. Each row reads the product (rate, band, description, carton
+    // size) from the one SKU row underneath it, so a rate typed under one supplier is the rate under the other too, and
+    // carries only its supplier's own carton details. A SKU with no supplier rows stays as it was.
+    const by = {};
+    (ref.links || []).forEach((l) => { if (l && l.active !== false && PL.bySku[l.sku] && l.supplier_id) (by[l.sku] = by[l.sku] || []).push(l); });
+    PL.multi = {};
+    PL.ref.skus = PL.ref.skus.flatMap((b) => {
+      const ls = by[b.sku]; if (!ls) return [b];
+      if (ls.length > 1) PL.multi[b.sku] = ls.map((l) => String(l.supplier_id));
+      return ls.map((l) => {
+        const x = Object.create(b), ex = l.extra || {};
+        x.supplier_id = String(l.supplier_id); x.cbm_per_carton = +l.cbm_per_carton || 0;
+        x.usd_per_unit = l.usd_per_unit == null ? null : +l.usd_per_unit; x.moq_cartons = l.moq_cartons == null ? null : +l.moq_cartons;
+        x.units_per_ctn = +l.units_per_ctn > 0 ? +l.units_per_ctn : 1; x.no_details = !!ex.no_details || !(+l.cbm_per_carton > 0);
+        return x;
+      });
+    });
   }
   function adoptUsage(u) {
     const map = {}; const rows = (u && u.rows) || [];
@@ -250,6 +275,8 @@
     return d;
   }
   function adoptDrafts(rows, sup) {
+    if (rows && Array.isArray(rows.others)) PL.xdrafts = rows.others.filter((r) => r && r.kind === 'draft' && !r.ordered_at && !r.archived_at)
+      .map((r) => ({ id: r.id, name: String(r.name || ''), supplier_id: String(r.supplier_id), manual: parsed(r.manual) || {}, lines: parsed(r.lines) || {} }));
     const old = PL.draftsFor === sup ? PL.drafts : [];
     const byId = {}; old.forEach((d) => { if (d.id != null) byId[d.id] = d; });
     const next = (rows || []).filter((r) => !r.archived_at).map((row) => {
@@ -320,6 +347,16 @@
   const targetOf = (r) => { const c = catOf(r.category_key), f = BANDF[r.band]; return c && f && c[f] != null ? +c[f] : null; };
   const rateOf = (r) => +r.rate || 0;
   const haveOf = (r) => { const s = stk(r); return s.avail + s.pack + s.onPur; };
+  // A SKU bought from two suppliers: its suggestion belongs to its main supplier (the supplier on its own row, the one
+  // it was last bought from); under the other supplier it only takes typed numbers. Cartons on the other suppliers'
+  // open drafts count as In draft on both sides: typed numbers always, and the main supplier's untyped cartons as saved.
+  const homeOf = (r) => String((PL.bySku[r.sku] || r).supplier_id || '');
+  const isHome = (r) => !PL.multi || !PL.multi[r.sku] || String(r.supplier_id) === homeOf(r);
+  const xParts = (r) => (PL.multi && PL.multi[r.sku] ? PL.xdrafts : []).map((d) => {
+    const typed = d.manual[r.sku] != null, n = typed ? +d.manual[r.sku] || 0 : String(d.supplier_id) === homeOf(r) ? +d.lines[r.sku] || 0 : 0;
+    return [supName(d.supplier_id) + ' · ' + d.name, n, typed];
+  }).filter((x) => x[1] > 0);
+  const xTyped = (r) => xParts(r).reduce((t, x) => t + (x[2] ? x[1] : 0), 0);
   // One number for every line nobody has typed, the same on every screen. What a SKU still needs (target × rate, less
   // stock, on order and every carton TYPED on the supplier's open drafts) belongs to the OLDEST open draft that has
   // not typed that SKU. It is worked out from stock, rates and typed numbers only, never from another open draft's
@@ -327,9 +364,9 @@
   const openDrafts = () => PL.drafts.filter(isOpenDraft).sort((a, b) => (a.id == null) - (b.id == null) || a.id - b.id);   // oldest first; a draft not saved yet is the newest
   function needOf(r, not) {                               // [cartons to suggest, cartons the skip rule left off]; not = a draft whose own typed number is left out (what it would get by not typing)
     const target = targetOf(r);
-    if (r.excluded || target == null) return [0, 0];
+    if (r.excluded || target == null || !isHome(r)) return [0, 0];
     const rate = rateOf(r); if (!(rate > 0)) return [0, 0];
-    const typed = PL.drafts.reduce((t, d) => t + (d !== not && isOpenDraft(d) && d.manual[r.sku] != null ? +d.manual[r.sku] || 0 : 0), 0);
+    const typed = PL.drafts.reduce((t, d) => t + (d !== not && isOpenDraft(d) && d.manual[r.sku] != null ? +d.manual[r.sku] || 0 : 0), 0) + xTyped(r);
     const have = haveOf(r) + typed, need = target * rate - have;
     if (need <= 0) return [0, 0];
     if (typed > 0 && need < 0.5) return [0, 0];           // cartons already typed for it: what is left is only the rounding of that number, not a carton for the next draft
@@ -348,7 +385,8 @@
   // In draft: cartons on the supplier's OTHER drafts that are not yet a placed PO. Ordered drafts count under On order (Unleashed), never both.
   function draftParts(r) {
     const d0 = cur();
-    return openDrafts().filter((d) => d !== d0 && (d.id != null || d._touched)).map((d) => [d.name + (d._link ? ' · ' + d._link : ''), cartonsOf(d, r)]).filter((x) => x[1] > 0);
+    return openDrafts().filter((d) => d !== d0 && (d.id != null || d._touched)).map((d) => [d.name + (d._link ? ' · ' + d._link : ''), cartonsOf(d, r)]).filter((x) => x[1] > 0)
+      .concat(xParts(r).map((x) => [x[0], x[1]]));
   }
   const draftOf = (r) => draftParts(r).reduce((t, x) => t + x[1], 0);
   function suggest(r) {                                   // what the open draft gets on a line it has not typed
@@ -389,6 +427,9 @@
       if (!r.excluded && !(rate > 0)) flags.push([order > 0 || fy(r) > 0 ? 'warn' : 'plain', 'No rate']);
       if (!r.excluded && noRow(r)) flags.push(['warn', 'No stock row in Unleashed']);   // counted as 0 and still suggested, so it needs a look
       if (order > 0 && r.moq_cartons && order < r.moq_cartons) flags.push(['warn', 'Under MOQ ' + r.moq_cartons]);
+      if (r.no_details) flags.push([order > 0 ? 'warn' : 'plain', 'No carton details']);   // no CBM on record for this supplier: the container meter counts it as 0
+      if (order > 0 && r.units_per_ctn > 1 && Math.abs(order / r.units_per_ctn - Math.round(order / r.units_per_ctn)) > 1e-9) flags.push(['plain', `Not whole ${supName(r.supplier_id)} cartons (${n0(r.units_per_ctn)} per carton)`]);
+      if (PL.multi && PL.multi[r.sku]) flags.push(['plain', isHome(r) ? 'Also from ' + PL.multi[r.sku].filter((s) => s !== String(r.supplier_id)).map(supName).join(', ') : 'Suggested on ' + supName(homeOf(r)) + ' drafts']);
       if (over) flags.push(['warn', 'Over 15 months']);
       if (order > 0 && added != null && added < 2 && now >= 3) flags.push(['plain', 'Adds under 2 months']);
     }

@@ -479,6 +479,62 @@
     const frtCtn = t.cbm > 0 ? (t.freight / t.cbm) * (+r.cbm_per_carton || 0) : 0, landed = audCtn + frtCtn;
     return { usdCtn, audCtn, frtCtn, landed, gp: r.rrp ? 1 - landed / r.rrp : null };
   }
+  // ---------- export (Liam, 19/11/2026: "get it out of the dashboard and share it straight with suppliers to get
+  // their confirmed pricing in") ----------
+  // CSV, UTF-8 with a BOM so Excel reads µ and × correctly. The SUPPLIER copy carries what the supplier needs to quote
+  // and two blank columns for their answer; never AUD, freight, landed cost, RRP or GP%. The INTERNAL copy adds those.
+  const csvCell = (v) => {
+    if (v == null) return '';
+    let x = String(v);
+    if (/^[=+\-@\t\r]/.test(x) && !/^-?\d+(\.\d+)?$/.test(x)) x = "'" + x;      // a cell that Excel would run as a formula
+    return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x;
+  };
+  const dec = (v, n) => (v == null || !isFinite(v) ? '' : String(Math.round(v * 10 ** n) / 10 ** n));
+  function exportRows(withCosts) {
+    const d = cur() || {}, t = cont(), sup = (QB.suppliers || []).find((x) => String(x.id) === String(d.supplier_id)) || {};
+    const lines = supSkus().map((r) => [r, calc(r)]).filter(([, c]) => c.order > 0);
+    const head = [['QIS Packaging - container ' + (withCosts ? 'plan (internal: includes our costs)' : 'enquiry: please confirm your pricing')],
+      ['Supplier', sup.name || supName(d.supplier_id)], ['Our reference', d.name || ''], ['Date', dmy(PL.today)],
+      ['Container', CAPLBL[d.container] || ''], ['Total CBM (estimate)', dec(t.cbm, 2)], ['Lines', String(lines.length)]];
+    if (withCosts) head.push(['AUD to USD rate', String(t.fx)], ['Freight & customs (AUD ex GST)', t.noFrt ? '' : String(t.freight)]);
+    const cols = ['Our code', 'Description', 'Pieces per unit', 'Order qty (units)', 'Supplier cartons', 'Total pieces', 'CBM (estimate)', 'Current USD per piece', 'Current USD total'];
+    if (withCosts) cols.push('AUD per unit', 'AUD total', 'Freight per unit', 'Landed per unit', 'Current cost', 'RRP', 'GP%');
+    else cols.push('Confirmed USD per piece', 'Your notes (MOQ, lead time, changes)');
+    let usd = 0, pcs = 0;
+    const body = lines.map(([r, c]) => {
+      const k = lineCost(r, t), upc = +r.units_per_ctn > 0 ? +r.units_per_ctn : 1, lineUsd = k.usdCtn * c.order;
+      usd += lineUsd; pcs += c.order * r.carton_qty;
+      const row = [r.sku, r.description, r.carton_qty, c.order, dec(c.order / upc, 2), c.order * r.carton_qty, dec(c.cbm, 3),
+        r.usd_per_unit == null ? '' : dec(+r.usd_per_unit, 5), dec(lineUsd, 2)];
+      if (withCosts) {
+        const f = t.cbm > 0 && !t.noFrt;
+        row.push(dec(k.audCtn, 2), dec(k.audCtn * c.order, 2), f ? dec(k.frtCtn, 2) : '', f ? dec(k.landed, 2) : '', r.current_cost ? dec(+r.current_cost, 2) : '', r.rrp ? dec(+r.rrp, 2) : '', k.gp == null || !f ? '' : dec(k.gp * 100, 1));
+      } else row.push('', '');
+      return row;
+    });
+    const total = ['Total', '', '', t.ctns, '', pcs, dec(t.cbm, 3), '', dec(usd, 2)];
+    if (withCosts) total.push('', dec(t.goods, 2), '', '', '', '', '');
+    // the summary under the table, as the meter shows it (Liam, 19/11/2026)
+    const sum = [['Summary'], ['Cartons (our units)', String(t.ctns)], ['CBM (estimate)', dec(t.cbm, 2)], ['Goods (USD)', dec(usd, 2)]];
+    if (withCosts) {
+      const f = !t.noFrt;
+      sum.push(['Goods (AUD ex GST)', dec(t.goods, 2)], ['Freight & customs (AUD ex GST)', f ? dec(t.freight, 2) : ''], ['Landed (AUD ex GST)', f ? dec(t.goods + t.freight, 2) : ''],
+        ['Freight per CBM (AUD)', f && t.cbm > 0 ? dec(t.freight / t.cbm, 2) : '']);
+    }
+    return [...head, [], cols, ...body, total, [], ...sum];
+  }
+  function exportCsv(withCosts) {
+    const d = cur(); if (!d) return;
+    const csv = '\ufeff' + exportRows(withCosts).map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n';
+    const sup = (QB.suppliers || []).find((x) => String(x.id) === String(d.supplier_id)) || {};
+    const slug = (x) => String(x || '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+    const name = `QIS-${slug(sup.code || sup.name || 'supplier')}-${slug(d.name)}-${PL.today.replace(/-/g, '')}-${withCosts ? 'internal' : 'for-supplier'}.csv`;
+    if (window.PL_API) window.PL_LAST_EXPORT = { name, csv };   // the test harness only (it has no browser download)
+    if (typeof Blob === 'undefined' || typeof URL === 'undefined' || !document.createElement) return;
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = name;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast(`Downloaded ${name}`);
+  }
   function frtDefault(d, c) {
     const cat = catOf(d.category_key) || {}, v = { 20: cat.freight_20, 40: cat.freight_40, '2x40': cat.freight_2x40 }[c];
     return v == null ? null : +v;
@@ -1234,7 +1290,7 @@
         <td class="num pl-sep">${r.rrp ? n2(+r.rrp) : '<span class="muted" title="No RRP is loaded for this line (the lookup shows #REF! on the balancing tab)">n/a</span>'}</td><td class="num" id="pl-cgp-${id}">${v.cgp}</td></tr>`;
     }).join('');
     return head + '<tbody>' + (rows || '<tr><td class="pl-l" colspan="15" style="color:var(--ink-soft)">Nothing on this container yet. Enter cartons on the Forecast tab, or press Back to suggested.</td></tr>') +
-      `<tr class="pl-tot"><td class="pl-stick">Total</td><td></td><td></td><td></td><td class="num pl-sep" id="pl-tt-ctns">${n0(t.ctns)}</td><td class="num" id="pl-tt-cbm">${n2(t.cbm)}</td><td class="pl-sep"></td><td class="num" id="pl-tt-usd">${n0(t.usd)}</td><td></td><td class="num" id="pl-tt-aud">${n0(t.goods)}</td><td class="pl-sep"></td><td></td><td></td><td class="pl-sep"></td><td></td></tr></tbody>`;
+      `<tr class="pl-tot"><td class="pl-stick">Total</td><td colspan="3" class="pl-l"><button class="btn ghost sm" type="button" data-act="plexport"${t.lines ? '' : ' disabled'} title="Download this container as a spreadsheet (CSV, opens in Excel): a copy for the supplier to confirm prices on, or one with our costs.">Export…</button></td><td class="num pl-sep" id="pl-tt-ctns">${n0(t.ctns)}</td><td class="num" id="pl-tt-cbm">${n2(t.cbm)}</td><td class="pl-sep"></td><td class="num" id="pl-tt-usd">${n0(t.usd)}</td><td></td><td class="num" id="pl-tt-aud">${n0(t.goods)}</td><td class="pl-sep"></td><td></td><td></td><td class="pl-sep"></td><td></td></tr></tbody>`;
   }
   function refreshContainer() {
     const t = cont(), hist = isHist();
@@ -1505,6 +1561,11 @@
       toast(`Restored "${d.name}". ${row.ordered_at ? 'It is back under Ordered.' : 'Its cartons count as In draft again.'}`);
     } catch (e) { toast(`Couldn't restore the draft. (${(e && e.message) || e})`); }
   }
+  ACT.plexport = (b) => {
+    const item = (k, label) => `<button class="btn ghost sm" style="text-align:left" data-pick="${k}">${label}</button>`;
+    pop(b, item('sup', 'For the supplier: quantities and their prices, for them to confirm (no AUD costs)') + item('int', 'Internal: with our AUD costs, freight, landed and GP%'),
+      (k) => { closeP(); exportCsv(k === 'int'); });
+  };
   ACT.pldraftmenu = (b) => {
     const d = cur(); if (!d || d.kind !== 'draft') return;
     const item = (k, label) => `<button class="btn ghost sm" style="text-align:left" data-pick="${k}">${label}</button>`;
